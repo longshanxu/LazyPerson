@@ -26,6 +26,13 @@
 - [V2 升级方案](docs/V2_UPGRADE_PLAN.md)
 - [V3 自动画线方案](docs/V3_AUTO_DRAWING_PLAN.md)
 - [V3.1 自动画线调整方案](docs/V3_1_AUTO_DRAWING_ADJUSTMENT.md)
+- [V3.2 行情终端 UI 与自然日窗口调整方案](docs/V3_2_MARKET_TERMINAL_UI_PLAN.md)
+- [V3.3 走势图优先与重点画线调整方案](docs/V3_3_CHART_FIRST_DRAWING_PLAN.md)
+- [V3.4 指标同屏与日线数据修正方案](docs/V3_4_INDICATOR_AND_CACHE_FIX_PLAN.md)
+- [V3.5 局域网访问与趋势通道调整方案](docs/V3_5_LAN_AND_TREND_CHANNEL_PLAN.md)
+- [V3.6 线位浅黄色与单方向趋势通道调整方案](docs/V3_6_LINE_COLOR_AND_SINGLE_CHANNEL_PLAN.md)
+- [V3.7 数据缓存与自选股切换性能修正](docs/V3_7_DATA_CACHE_AND_SWITCH_PERFORMANCE.md)
+- [V3.8 开发服务启动治理与 VSCode Launch 方案](docs/V3_8_DEV_STARTUP_AND_VSCODE_LAUNCH.md)
 - [项目更新记录](docs/UPDATES.md)
 - [文档落地规则](docs/DOCUMENTATION_POLICY.md)
 
@@ -35,6 +42,7 @@
 python -m pip install -r requirements.txt
 npm install
 npm --prefix frontend install
+npm run stop:dev
 npm run dev
 ```
 
@@ -42,6 +50,15 @@ npm run dev
 
 - 前端：http://127.0.0.1:5175
 - 后端健康检查：http://127.0.0.1:8008/api/health
+- 局域网访问：http://本机局域网IP:5175
+
+当前开发服务监听 `0.0.0.0`。如果局域网设备仍无法访问，请确认 Windows 防火墙允许 Node.js 和 Python 在专用网络中通信。
+
+VSCode 手动启动：
+
+- 打开 Run and Debug。
+- 选择 `LazyPerson Dev`。
+- 点击启动。启动前会自动执行端口清理任务。
 
 ## 验证
 

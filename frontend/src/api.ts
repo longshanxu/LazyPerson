@@ -43,7 +43,7 @@ export const api = {
     request<KlinePayload>(
       `/api/kline/${encodeURIComponent(
         symbol,
-      )}?period=${period}&indicators=ma,macd,rsi&refresh=${refresh}&limit=${limit || (period === "day" ? 90 : 1000)}`,
+      )}?period=${period}&indicators=macd,lon&refresh=${refresh}&limit=${limit || (period === "day" ? 140 : 1000)}`,
     ),
   moneyFlow: (symbol: string, refresh = false) =>
     request<MoneyFlowPayload>(`/api/money-flow/${encodeURIComponent(symbol)}?refresh=${refresh}`),

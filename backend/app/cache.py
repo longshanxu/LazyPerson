@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -158,11 +159,12 @@ class CacheStore:
             rows = conn.execute(sql, params).fetchall()
         return [dict(row) for row in rows]
 
-    def cache_path(self, data_type: str, symbol: str = "", period: str = "") -> Path:
+    def cache_path(self, data_type: str, symbol: str = "", period: str = "", cache_key: str | None = None) -> Path:
+        suffix = f"_{hashlib.sha1(cache_key.encode('utf-8')).hexdigest()[:12]}" if cache_key else ""
         if data_type == "kline_day":
-            return self.root / "kline" / "day" / f"{symbol}.parquet"
+            return self.root / "kline" / "day" / f"{symbol}{suffix}.parquet"
         if data_type == "kline_minute":
-            return self.root / "kline" / "minute" / period / f"{symbol}.parquet"
+            return self.root / "kline" / "minute" / period / f"{symbol}{suffix}.parquet"
         if data_type == "money_flow":
             return self.root / "money_flow" / f"{symbol}.parquet"
         if data_type == "quote":
@@ -183,7 +185,7 @@ class CacheStore:
         start_at: str | None = None,
         end_at: str | None = None,
     ) -> Path:
-        path = self.cache_path(data_type, symbol, period)
+        path = self.cache_path(data_type, symbol, period, cache_key)
         path.parent.mkdir(parents=True, exist_ok=True)
         frame.to_parquet(path, index=False)
         with self._connection() as conn:

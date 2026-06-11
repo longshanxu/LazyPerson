@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Search, Star } from "lucide-react";
 import { api } from "./api";
 import { IndicatorTabs } from "./components/IndicatorTabs";
 import { KlineChart } from "./components/KlineChart";
 import { StatusBar } from "./components/StatusBar";
 import { StockSummary } from "./components/StockSummary";
 import { WatchlistPanel } from "./components/WatchlistPanel";
-import type { DataQuality, KlinePayload, MoneyFlowPayload, Quote, SymbolItem, WatchlistItem } from "./types";
+import type { DataQuality, KlinePayload, Quote, SymbolItem, WatchlistItem } from "./types";
 import { computeAutoDrawing, loadLineColors, saveLineColors, type AutoLineColorMap } from "./utils/autoDrawing";
+import { sliceDailyPayloadByCalendarDays } from "./utils/calendarWindow";
 import { normalizeError, qualityText } from "./utils/format";
 
 const periods = ["day", "1m", "5m", "15m", "30m", "60m"];
@@ -21,21 +23,25 @@ export function App() {
   const [period, setPeriod] = useState("day");
   const [sortKey, setSortKey] = useState<SortKey>("custom");
   const [kline, setKline] = useState<KlinePayload | null>(null);
-  const [moneyFlow, setMoneyFlow] = useState<MoneyFlowPayload | null>(null);
   const [quoteQuality, setQuoteQuality] = useState<DataQuality | null>(null);
   const [klineQuality, setKlineQuality] = useState<DataQuality | null>(null);
   const [backendStatus, setBackendStatus] = useState("连接中");
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
   const [lineColors, setLineColors] = useState<AutoLineColorMap>(() => loadLineColors());
+  const [drawer, setDrawer] = useState<"watchlist" | "summary" | null>(null);
+  const quotesRequestRef = useRef(0);
+  const detailRequestRef = useRef(0);
 
   const symbols = useMemo(() => watchlist.map((item) => item.symbol), [watchlist]);
+  const quoteTargets = useMemo(() => (symbols.length ? symbols : [selected]), [selected, symbols]);
   const selectedQuote = quotes.find((quote) => quote.symbol === selected);
-  const latestBar = kline?.bars[kline.bars.length - 1];
+  const displayKline = useMemo(() => sliceDailyPayloadByCalendarDays(kline, 90), [kline]);
+  const latestBar = displayKline?.bars[displayKline.bars.length - 1];
   const autoDrawing = useMemo(() => {
-    if (kline?.period !== "day") return null;
-    return computeAutoDrawing(kline?.bars || [], 90);
-  }, [kline]);
+    if (displayKline?.period !== "day") return null;
+    return computeAutoDrawing(displayKline?.bars || [], 90);
+  }, [displayKline]);
 
   const loadWatchlist = useCallback(async () => {
     const response = await api.listWatchlist();
@@ -44,30 +50,30 @@ export function App() {
   }, []);
 
   const loadQuotes = useCallback(async (refresh = false) => {
-    const target = symbols.length ? symbols : [selected];
-    if (!target.length) return;
-    const response = await api.realtimeQuotes(target, refresh);
+    if (!quoteTargets.length) return;
+    const requestId = ++quotesRequestRef.current;
+    const response = await api.realtimeQuotes(quoteTargets, refresh);
+    if (requestId !== quotesRequestRef.current) return;
     setQuotes(response.data);
     setQuoteQuality(response.quality || null);
     if (response.quality?.fallback || response.quality?.stale) {
       setNotice(response.quality.message || qualityText(response.quality));
     }
-  }, [selected, symbols]);
+  }, [quoteTargets]);
 
   const loadDetail = useCallback(async (refresh = false) => {
     if (!selected) return;
-    const [klineResponse, flowResponse] = await Promise.allSettled([
-      api.kline(selected, period, refresh, period === "day" ? 90 : 1000),
-      api.moneyFlow(selected, refresh),
-    ]);
+    const requestId = ++detailRequestRef.current;
+    setKline(null);
+    const klineResponse = await Promise.resolve(api.kline(selected, period, refresh, period === "day" ? 140 : 1000))
+      .then((value) => ({ status: "fulfilled" as const, value }))
+      .catch((reason) => ({ status: "rejected" as const, reason }));
+    if (requestId !== detailRequestRef.current) return;
     if (klineResponse.status === "fulfilled") {
       setKline(klineResponse.value.data);
       setKlineQuality(klineResponse.value.quality || null);
     } else {
       setNotice(normalizeError(klineResponse.reason));
-    }
-    if (flowResponse.status === "fulfilled") {
-      setMoneyFlow(flowResponse.value.data);
     }
   }, [period, selected]);
 
@@ -165,53 +171,77 @@ export function App() {
         </div>
       )}
 
-      <section className="terminal-layout">
-        <WatchlistPanel
-          query={query}
-          results={results}
-          watchlist={watchlist}
-          quotes={quotes}
-          selected={selected}
-          sortKey={sortKey}
-          onQueryChange={setQuery}
-          onSortChange={setSortKey}
-          onAdd={addSymbol}
-          onRemove={removeSymbol}
-          onSelect={setSelected}
-        />
-
+      <section className="terminal-layout chart-first">
         <section className="chart-workbench">
           <div className="workbench-head">
             <div>
               <h2>{selectedQuote?.name || selected}</h2>
               <span>{selected} · {qualityText(klineQuality)}</span>
             </div>
-            <div className="period-switch">
-              {periods.map((item) => (
-                <button className={period === item ? "active" : ""} key={item} onClick={() => setPeriod(item)}>
-                  {item === "day" ? "日 K" : item}
-                </button>
-              ))}
+            <div className="workbench-actions">
+              <button className="terminal-button" onClick={() => setDrawer("watchlist")}>
+                <Search size={15} />
+                自选股
+              </button>
+              <button className="terminal-button" onClick={() => setDrawer("summary")}>
+                <Star size={15} />
+                个股信息
+              </button>
+              <div className="period-switch">
+                {periods.map((item) => (
+                  <button className={period === item ? "active" : ""} key={item} onClick={() => setPeriod(item)}>
+                    {item === "day" ? "日 K" : item}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
-          <KlineChart payload={kline} autoDrawing={autoDrawing} lineColors={lineColors} />
-          <IndicatorTabs kline={kline} moneyFlow={moneyFlow} />
+          <KlineChart payload={displayKline} autoDrawing={autoDrawing} lineColors={lineColors} />
+          <IndicatorTabs kline={displayKline} />
         </section>
-
-        <StockSummary
-          symbol={selected}
-          quote={selectedQuote}
-          latestBar={latestBar}
-          quoteQuality={quoteQuality}
-          klineQuality={klineQuality}
-          autoDrawing={autoDrawing}
-          lineColors={lineColors}
-          onLineColorChange={updateLineColor}
-          onRefresh={refreshAll}
-          onRemove={() => removeSymbol(selected)}
-        />
       </section>
+
+      {drawer && (
+        <div className="drawer-backdrop" onClick={() => setDrawer(null)}>
+          <div className={`side-drawer ${drawer}`} onClick={(event) => event.stopPropagation()}>
+            <button className="drawer-close" onClick={() => setDrawer(null)} title="关闭">
+              <span aria-hidden="true">×</span>
+            </button>
+            {drawer === "watchlist" ? (
+              <WatchlistPanel
+                query={query}
+                results={results}
+                watchlist={watchlist}
+                quotes={quotes}
+                selected={selected}
+                sortKey={sortKey}
+                onQueryChange={setQuery}
+                onSortChange={setSortKey}
+                onAdd={addSymbol}
+                onRemove={removeSymbol}
+                onSelect={(symbol) => {
+                  setSelected(symbol);
+                  setDrawer(null);
+                }}
+              />
+            ) : (
+              <StockSummary
+                symbol={selected}
+                quote={selectedQuote}
+                latestBar={latestBar}
+                quoteQuality={quoteQuality}
+                klineQuality={klineQuality}
+                autoDrawing={autoDrawing}
+                lineColors={lineColors}
+                onLineColorChange={updateLineColor}
+                onRefresh={refreshAll}
+                onRemove={() => removeSymbol(selected)}
+              />
+            )}
+          </div>
+        </div>
+      )}
     </main>
   );
 }

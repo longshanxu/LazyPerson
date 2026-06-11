@@ -85,7 +85,7 @@ def create_app() -> FastAPI:
     ) -> ApiResponse:
         effective_limit = limit
         if effective_limit is None:
-            effective_limit = 90 if period == "day" else 1000
+            effective_limit = 140 if period == "day" else 1000
         try:
             data, quality = service.kline(
                 symbol=symbol,

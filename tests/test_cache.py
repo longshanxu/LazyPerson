@@ -38,7 +38,39 @@ class CacheTests(unittest.TestCase):
             self.assertEqual(cached_frame.iloc[0]["close"], 100.0)
             self.assertFalse(meta["stale"])
 
+    def test_kline_cache_keys_use_distinct_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = CacheStore(DummySettings(Path(tmp)))
+            first = pd.DataFrame([{"time": "2026-06-10", "close": 100.0}])
+            second = pd.DataFrame([{"time": "2026-05-10", "close": 200.0}])
+
+            cache.write_frame(
+                cache_key="kline_day:600519:day:none::",
+                data_type="kline_day",
+                frame=first,
+                source="test",
+                symbol="600519",
+                period="day",
+                ttl_seconds=60,
+            )
+            cache.write_frame(
+                cache_key="kline_day:600519:day:none:20260501:20260531",
+                data_type="kline_day",
+                frame=second,
+                source="test",
+                symbol="600519",
+                period="day",
+                ttl_seconds=60,
+            )
+
+            cached_first = cache.read_frame("kline_day:600519:day:none::")
+            cached_second = cache.read_frame("kline_day:600519:day:none:20260501:20260531")
+            self.assertIsNotNone(cached_first)
+            self.assertIsNotNone(cached_second)
+            self.assertEqual(cached_first[0].iloc[0]["close"], 100.0)
+            self.assertEqual(cached_second[0].iloc[0]["close"], 200.0)
+            self.assertNotEqual(cached_first[1]["path"], cached_second[1]["path"])
+
 
 if __name__ == "__main__":
     unittest.main()
-

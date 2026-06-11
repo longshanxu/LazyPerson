@@ -28,9 +28,17 @@ function chartTime(value: string) {
 export function KlineChart({ payload, autoDrawing, lineColors }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const seriesRef = useRef<ISeriesApi<SeriesType>[]>([]);
   const barsRef = useRef<KlineBar[]>([]);
   const [hoverBar, setHoverBar] = useState<KlineBar | null>(null);
+  const [levelLabels, setLevelLabels] = useState<Array<{
+    label: string;
+    color: string;
+    textColor: string;
+    top: number;
+    highlight: boolean;
+  }>>([]);
 
   const candleData = useMemo(() => {
     return (payload?.bars || [])
@@ -55,7 +63,7 @@ export function KlineChart({ payload, autoDrawing, lineColors }: Props) {
       .map((bar) => ({
         time: chartTime(bar.time) as never,
         value: Number(bar.volume),
-        color: (bar.close || 0) >= (bar.open || 0) ? "rgba(214, 79, 69, 0.45)" : "rgba(21, 135, 111, 0.45)",
+        color: (bar.close || 0) >= (bar.open || 0) ? "rgba(242, 77, 77, 0.46)" : "rgba(0, 168, 132, 0.46)",
       }));
   }, [payload]);
 
@@ -65,19 +73,19 @@ export function KlineChart({ payload, autoDrawing, lineColors }: Props) {
     const chart = createChart(element, {
       autoSize: true,
       layout: {
-        background: { type: ColorType.Solid, color: "#ffffff" },
-        textColor: "#3d4957",
+        background: { type: ColorType.Solid, color: "#070b12" },
+        textColor: "#8f9bb0",
         fontFamily: "Inter, system-ui, sans-serif",
       },
       grid: {
-        vertLines: { color: "#e9edf2" },
-        horzLines: { color: "#e9edf2" },
+        vertLines: { color: "#172033" },
+        horzLines: { color: "#172033" },
       },
       rightPriceScale: {
-        borderColor: "#d8dee7",
+        borderColor: "#28354a",
       },
       timeScale: {
-        borderColor: "#d8dee7",
+        borderColor: "#28354a",
         timeVisible: true,
       },
       handleScroll: {
@@ -112,6 +120,7 @@ export function KlineChart({ payload, autoDrawing, lineColors }: Props) {
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
+    candleSeriesRef.current = null;
     seriesRef.current.forEach((series) => {
       try {
         chart.removeSeries(series);
@@ -121,35 +130,37 @@ export function KlineChart({ payload, autoDrawing, lineColors }: Props) {
     });
     seriesRef.current = [];
     const candle = chart.addCandlestickSeries({
-      upColor: "#d64f45",
-      downColor: "#15876f",
-      borderUpColor: "#d64f45",
-      borderDownColor: "#15876f",
-      wickUpColor: "#d64f45",
-      wickDownColor: "#15876f",
+      upColor: "#f24d4d",
+      downColor: "#00a884",
+      borderUpColor: "#f24d4d",
+      borderDownColor: "#00a884",
+      wickUpColor: "#f24d4d",
+      wickDownColor: "#00a884",
     });
     candle.setData(candleData);
+    candleSeriesRef.current = candle;
     seriesRef.current.push(candle);
 
     if (payload?.period === "day" && autoDrawing) {
       autoDrawing.levels.forEach((level, index) => {
+        const highlight = isHighlightLevel(level.label);
         candle.createPriceLine({
           price: level.price,
-          color: colorForLevel(level, lineColors, index),
-          lineWidth: 1,
-          lineStyle: LineStyle.Dashed,
-          axisLabelVisible: true,
-          title: `${level.label} ${level.price}`,
+          color: lineColor(level.label, colorForLevel(level, lineColors, index)),
+          lineWidth: highlight ? 3 : 1,
+          lineStyle: LineStyle.Solid,
+          axisLabelVisible: false,
+          title: "",
         });
       });
 
       autoDrawing.trendSegments.forEach((segment, index) => {
         const trend = chart.addLineSeries({
-          color: segment.direction === "up" ? ["#d64f45", "#f59e0b"][index % 2] : ["#15876f", "#2563eb"][index % 2],
+          color: segment.direction === "up" ? "#f24d4d" : "#00a884",
           lineWidth: 2,
           priceLineVisible: false,
           lastValueVisible: false,
-          lineStyle: segment.direction === "up" ? LineStyle.Solid : LineStyle.Dotted,
+          lineStyle: LineStyle.Solid,
         });
         trend.setData([
           { time: chartTime(segment.start.time) as never, value: segment.start.price },
@@ -176,10 +187,10 @@ export function KlineChart({ payload, autoDrawing, lineColors }: Props) {
 
     const ma = payload?.indicators?.ma || {};
     const colors: Record<string, string> = {
-      ma5: "#1f6feb",
-      ma10: "#a35d00",
-      ma20: "#6f42c1",
-      ma60: "#0f766e",
+      ma5: "#f2c94c",
+      ma10: "#38bdf8",
+      ma20: "#c084fc",
+      ma60: "#f97316",
     };
     Object.entries(ma).forEach(([name, values]) => {
       const series = chart.addLineSeries({
@@ -200,7 +211,35 @@ export function KlineChart({ payload, autoDrawing, lineColors }: Props) {
     });
 
     chart.timeScale().fitContent();
+    window.setTimeout(updateLevelLabelPositions, 60);
   }, [autoDrawing, candleData, lineColors, payload, volumeData]);
+
+  useEffect(() => {
+    const resize = () => updateLevelLabelPositions();
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, [autoDrawing, lineColors]);
+
+  function updateLevelLabelPositions() {
+    if (!autoDrawing || !candleSeriesRef.current) {
+      setLevelLabels([]);
+      return;
+    }
+    const rows = autoDrawing.levels
+      .map((level, index) => {
+        const coordinate = candleSeriesRef.current?.priceToCoordinate(level.price);
+        if (coordinate === null || coordinate === undefined) return null;
+        return {
+          label: level.label,
+          color: lineColor(level.label, colorForLevel(level, lineColors, index)),
+          textColor: labelTextColor(level.label),
+          top: Number(coordinate),
+          highlight: isHighlightLevel(level.label),
+        };
+      })
+      .filter(Boolean) as Array<{ label: string; color: string; textColor: string; top: number; highlight: boolean }>;
+    setLevelLabels(rows);
+  }
 
   function setLogicalRange(nextFrom: number, nextTo: number) {
     const chart = chartRef.current;
@@ -215,6 +254,7 @@ export function KlineChart({ payload, autoDrawing, lineColors }: Props) {
     const center = (range.from + range.to) / 2;
     const half = ((range.to - range.from) * factor) / 2;
     setLogicalRange(center - half, center + half);
+    window.setTimeout(updateLevelLabelPositions, 30);
   }
 
   function scroll(direction: -1 | 1) {
@@ -223,11 +263,11 @@ export function KlineChart({ payload, autoDrawing, lineColors }: Props) {
     if (!chart || !range) return;
     const shift = (range.to - range.from) * 0.18 * direction;
     setLogicalRange(range.from + shift, range.to + shift);
+    window.setTimeout(updateLevelLabelPositions, 30);
   }
 
   const latest = hoverBar || payload?.bars[payload.bars.length - 1];
   const macd = payload?.indicators?.macd;
-  const rsi = payload?.indicators?.rsi;
   const lastIndex = Math.max((payload?.bars.length || 1) - 1, 0);
 
   return (
@@ -235,7 +275,7 @@ export function KlineChart({ payload, autoDrawing, lineColors }: Props) {
       <div className="chart-header">
         <h3>K 线</h3>
         <div className="chart-header-actions">
-          <span>{payload?.period || "-"} · {latest?.time || "-"}</span>
+          <span>{payload?.period === "day" ? "近90自然日交易K" : payload?.period || "-"} · {latest?.time || "-"}</span>
           <button onClick={() => zoom(0.72)} title="放大">+</button>
           <button onClick={() => zoom(1.28)} title="缩小">-</button>
           <button onClick={() => scroll(-1)} title="左移">←</button>
@@ -259,14 +299,45 @@ export function KlineChart({ payload, autoDrawing, lineColors }: Props) {
         <span>幅 {formatPercent(latest?.pct_chg)}</span>
         <span>量 {formatNumber(latest?.volume)}</span>
       </div>
-      <div className="kline-canvas" ref={containerRef} />
+      <div className="chart-canvas-wrap">
+        <div className="kline-canvas" ref={containerRef} />
+        {levelLabels.length > 0 && (
+          <div className="level-label-overlay" aria-hidden="true">
+            {levelLabels.map((item) => (
+              <div
+                className={`level-label-row ${item.highlight ? "highlight" : ""}`}
+                key={item.label}
+                style={{ top: item.top, backgroundColor: item.color, color: item.textColor }}
+              >
+                <span>{item.label}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
       <div className="indicator-strip">
         <span>MACD {macd?.hist?.[lastIndex]?.toFixed?.(3) ?? "-"}</span>
         <span>DIF {macd?.dif?.[lastIndex]?.toFixed?.(3) ?? "-"}</span>
         <span>DEA {macd?.dea?.[lastIndex]?.toFixed?.(3) ?? "-"}</span>
-        <span>RSI6 {rsi?.rsi6?.[lastIndex]?.toFixed?.(2) ?? "-"}</span>
-        <span>RSI12 {rsi?.rsi12?.[lastIndex]?.toFixed?.(2) ?? "-"}</span>
+        <span>LON {payload?.indicators?.lon?.lon?.[lastIndex]?.toFixed?.(3) ?? "-"}</span>
+        <span>LONMA {payload?.indicators?.lon?.lonma?.[lastIndex]?.toFixed?.(3) ?? "-"}</span>
       </div>
     </div>
   );
+}
+
+function isHighlightLevel(label: string) {
+  return label === "+20%" || label === "+50%" || label === "+80%";
+}
+
+function lineColor(label: string, fallback: string) {
+  if (label === "+20%") return "#f24d4d";
+  if (label === "+50%") return "#1f6feb";
+  if (label === "+80%") return "#ffffff";
+  return fallback;
+}
+
+function labelTextColor(label: string) {
+  if (label === "+20%" || label === "+50%") return "#ffffff";
+  return "#07111f";
 }

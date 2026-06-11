@@ -57,21 +57,21 @@ export type AutoDrawing = {
 export type AutoLineColorMap = Record<string, string>;
 
 const DEFAULT_WINDOW = 90;
-const STORAGE_KEY = "lazy-person:auto-line-colors:v1";
+const STORAGE_KEY = "lazy-person:auto-line-colors:v3";
+const DEFAULT_YELLOW = "#f6d36b";
 const DEFAULT_COLORS: AutoLineColorMap = {
-  "0%": "#64748b",
-  "+10%": "#1f6feb",
-  "+20%": "#d64f45",
-  "+30%": "#6f42c1",
-  "+40%": "#a35d00",
-  "+50%": "#0f766e",
-  "+60%": "#b91c1c",
-  "+70%": "#2563eb",
-  "+80%": "#7c3aed",
-  "+90%": "#be123c",
-  "+100%": "#0f766e",
+  "0%": DEFAULT_YELLOW,
+  "+10%": DEFAULT_YELLOW,
+  "+20%": "#f24d4d",
+  "+30%": DEFAULT_YELLOW,
+  "+40%": DEFAULT_YELLOW,
+  "+50%": "#1f6feb",
+  "+60%": DEFAULT_YELLOW,
+  "+70%": DEFAULT_YELLOW,
+  "+80%": "#ffffff",
+  "+90%": DEFAULT_YELLOW,
+  "+100%": DEFAULT_YELLOW,
 };
-const FALLBACK_COLORS = ["#64748b", "#1f6feb", "#d64f45", "#6f42c1", "#a35d00", "#0f766e", "#be123c"];
 
 type Pivot = {
   time: string;
@@ -123,12 +123,12 @@ export function computeAutoDrawing(bars: KlineBar[], windowSize = DEFAULT_WINDOW
     base: {
       time: lowBar.time,
       price: lowPrice,
-      label: "90日低点",
+      label: "90自然日低点",
     },
     target: {
       time: highBar.time,
       price: highPrice,
-      label: "90日高点",
+      label: "90自然日高点",
     },
     levels,
     trendSegments: buildTrendSegments(recent),
@@ -155,79 +155,59 @@ function buildLevels(lowPrice: number, highPrice: number) {
 }
 
 function buildTrendSegments(bars: KlineBar[]) {
-  const highs = findPivots(bars, "high");
-  const lows = findPivots(bars, "low");
-  const upSegments = buildSegments(lows, "up", "上升趋势线");
-  const downSegments = buildSegments(highs, "down", "下降趋势线");
-  return [...upSegments, ...downSegments];
+  if (bars.length < 20) return [];
+  const midpoint = Math.floor(bars.length / 2);
+  const firstRange = rangePivots(bars.slice(0, midpoint), 0);
+  const secondRange = rangePivots(bars.slice(midpoint), midpoint);
+  if (!firstRange || !secondRange) return [];
+
+  const firstCenter = (firstRange.high.price + firstRange.low.price) / 2;
+  const secondCenter = (secondRange.high.price + secondRange.low.price) / 2;
+  const direction: "up" | "down" = secondCenter >= firstCenter ? "up" : "down";
+  const label = direction === "up" ? "向上通道" : "向下通道";
+
+  return [
+    segment(`${direction}-lower`, `${label} 下轨`, direction, firstRange.low, secondRange.low),
+    segment(`${direction}-upper`, `${label} 上轨`, direction, firstRange.high, secondRange.high),
+  ];
 }
 
-function findPivots(bars: KlineBar[], kind: "high" | "low") {
-  const pivots: Pivot[] = [];
-  const radius = 2;
-
-  for (let index = radius; index < bars.length - radius; index += 1) {
-    const current = Number(bars[index][kind]);
-    const area = bars.slice(index - radius, index + radius + 1).map((bar) => Number(bar[kind]));
-    const isPivot = kind === "high" ? current === Math.max(...area) : current === Math.min(...area);
-    if (isPivot) {
-      pivots.push({
-        time: bars[index].time,
-        price: current,
-        index,
-      });
-    }
-  }
-
-  if (pivots.length >= 4) return pivots;
-
-  const chunkSize = Math.max(8, Math.floor(bars.length / 6));
-  for (let start = 0; start < bars.length; start += chunkSize) {
-    const chunk = bars.slice(start, start + chunkSize);
-    if (!chunk.length) continue;
-    let pivotIndex = 0;
-    chunk.forEach((bar, offset) => {
-      const value = Number(bar[kind]);
-      const pivotValue = Number(chunk[pivotIndex][kind]);
-      if ((kind === "high" && value > pivotValue) || (kind === "low" && value < pivotValue)) {
-        pivotIndex = offset;
-      }
-    });
-    const bar = chunk[pivotIndex];
-    pivots.push({
-      time: bar.time,
-      price: Number(bar[kind]),
-      index: start + pivotIndex,
-    });
-  }
-
-  return dedupePivots(pivots);
+function rangePivots(bars: KlineBar[], offset: number) {
+  if (!bars.length) return null;
+  let highIndex = 0;
+  let lowIndex = 0;
+  bars.forEach((bar, index) => {
+    if (Number(bar.high) > Number(bars[highIndex].high)) highIndex = index;
+    if (Number(bar.low) < Number(bars[lowIndex].low)) lowIndex = index;
+  });
+  return {
+    high: pivotFromBar(bars[highIndex], offset + highIndex, "high"),
+    low: pivotFromBar(bars[lowIndex], offset + lowIndex, "low"),
+  };
 }
 
-function buildSegments(pivots: Pivot[], direction: "up" | "down", label: string) {
-  const pairs: AutoTrendSegment[] = [];
-  for (let index = 0; index < pivots.length - 1; index += 1) {
-    const start = pivots[index];
-    const end = pivots[index + 1];
-    if (end.index <= start.index) continue;
-    pairs.push({
-      id: `${direction}-${index}`,
-      label: `${label} ${pairs.length + 1}`,
-      direction,
-      start,
-      end,
-    });
-  }
-  return pairs.slice(-2).map((item, index) => ({
-    ...item,
-    id: `${direction}-${index + 1}`,
-    label: `${label} ${index + 1}`,
-  }));
+function pivotFromBar(bar: KlineBar, index: number, kind: "high" | "low"): Pivot {
+  return {
+    time: bar.time,
+    price: Number(bar[kind]),
+    index,
+  };
 }
 
-function dedupePivots(pivots: Pivot[]) {
-  const sorted = [...pivots].sort((a, b) => a.index - b.index);
-  return sorted.filter((pivot, index) => index === 0 || pivot.index !== sorted[index - 1].index);
+function segment(
+  id: string,
+  label: string,
+  direction: "up" | "down",
+  start: Pivot,
+  end: Pivot,
+): AutoTrendSegment {
+  return {
+    id,
+    label,
+    direction,
+    start,
+    end,
+  };
 }
 
 function roundPrice(value: number) {
@@ -258,6 +238,8 @@ export function saveLineColors(colors: AutoLineColorMap) {
 }
 
 export function colorForLevel(level: AutoLineLevel, colors: AutoLineColorMap, index = 0) {
-  return colors[level.label] || FALLBACK_COLORS[index % FALLBACK_COLORS.length];
+  if (level.label === "+20%") return "#f24d4d";
+  if (level.label === "+50%") return "#1f6feb";
+  if (level.label === "+80%") return "#ffffff";
+  return colors[level.label] || DEFAULT_COLORS[level.label] || (index >= 0 ? DEFAULT_YELLOW : DEFAULT_YELLOW);
 }
-

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
+from collections.abc import Callable
+from datetime import datetime, timedelta
 
 import pandas as pd
 
@@ -67,19 +68,37 @@ class MarketService:
         symbol: str = "",
         period: str = "",
         refresh: bool = False,
+        cache_validator: Callable[[pd.DataFrame, dict], str | None] | None = None,
+        prefer_stale_cache: bool = False,
     ) -> tuple[pd.DataFrame, DataQuality]:
+        warnings: list[str] = []
+        if prefer_stale_cache and not refresh:
+            cached = self.cache.read_frame(cache_key, allow_stale=True)
+            if cached:
+                frame, meta = cached
+                invalid_reason = cache_validator(frame, meta) if cache_validator else None
+                if not invalid_reason:
+                    return frame, self._quality_from_meta(meta, stale=bool(meta.get("stale")))
+                warnings.append(f"cache:{invalid_reason}")
+
         if not refresh:
             cached = self.cache.read_frame(cache_key, allow_stale=False)
             if cached:
                 frame, meta = cached
-                return frame, self._quality_from_meta(meta)
+                invalid_reason = cache_validator(frame, meta) if cache_validator else None
+                if not invalid_reason:
+                    return frame, self._quality_from_meta(meta)
+                warnings.append(f"cache:{invalid_reason}")
 
-        warnings: list[str] = []
         for source, fetcher in fetchers:
             try:
                 frame = fetcher()
                 if frame is None or frame.empty:
                     warnings.append(f"{source}:empty")
+                    continue
+                invalid_reason = cache_validator(frame, {"source": source}) if cache_validator else None
+                if invalid_reason:
+                    warnings.append(f"{source}:{invalid_reason}")
                     continue
                 start_at = str(frame.iloc[0].get("time", "")) if "time" in frame.columns else None
                 end_at = str(frame.iloc[-1].get("time", "")) if "time" in frame.columns else None
@@ -112,8 +131,33 @@ class MarketService:
         cached = self.cache.read_frame(cache_key, allow_stale=True)
         if cached:
             frame, meta = cached
+            invalid_reason = cache_validator(frame, meta) if cache_validator else None
+            if invalid_reason:
+                warnings.append(f"cache:{invalid_reason}")
+                raise ProviderError("; ".join(warnings) or "cached data is invalid")
             return frame, self._quality_from_meta(meta, stale=True, warnings=warnings + ["stale_cache"])
         raise ProviderError("; ".join(warnings) or "no provider returned data")
+
+    def _validate_recent_daily_cache(self, frame: pd.DataFrame, _meta: dict) -> str | None:
+        if frame.empty or "time" not in frame.columns:
+            return "empty_daily_cache"
+        latest = pd.to_datetime(frame["time"], errors="coerce").max()
+        if pd.isna(latest):
+            return "invalid_daily_time"
+        lag_days = (now_utc().date() - latest.date()).days
+        if lag_days > 14:
+            return f"daily_cache_latest_too_old:{latest.date().isoformat()}"
+        return None
+
+    def _filter_daily_trading_rows(self, frame: pd.DataFrame) -> pd.DataFrame:
+        if frame.empty or "time" not in frame.columns:
+            return frame
+        dates = pd.to_datetime(frame["time"], errors="coerce")
+        valid = dates.notna() & dates.dt.weekday.lt(5)
+        for column in ["open", "high", "low", "close"]:
+            if column in frame.columns:
+                valid &= frame[column].notna()
+        return frame.loc[valid].reset_index(drop=True)
 
     def search_symbols(self, query: str, limit: int = 20, refresh: bool = False) -> tuple[list[dict], DataQuality]:
         cache_key = "symbols:all"
@@ -152,6 +196,7 @@ class MarketService:
                 ttl_seconds=self.settings.quote_ttl_seconds,
                 symbol="_".join(clean_symbols),
                 refresh=refresh,
+                prefer_stale_cache=True,
             )
             return frame.to_dict("records"), quality
         except ProviderError as exc:
@@ -213,13 +258,26 @@ class MarketService:
         data_type = "kline_day" if period == "day" else "kline_minute"
         ttl = self.settings.day_ttl_seconds if period == "day" else self.settings.minute_ttl_seconds
         cache_key = f"{data_type}:{clean}:{period}:{adjust}:{start or ''}:{end or ''}"
+        request_start = start
+        request_end = end
+        if period == "day" and not start and not end:
+            days_back = max(365, (limit or 140) * 3)
+            request_start = (now_utc().date() - timedelta(days=days_back)).isoformat()
         fetchers: list[tuple[str, callable]] = []
         if period == "day":
-            fetchers = [
-                ("akshare", lambda: AKShareAdapter().kline(clean, period, start, end, adjust)),
-                ("baostock", lambda: BaoStockAdapter().kline(clean, start, end, adjust)),
-                ("efinance", lambda: EFinanceAdapter().kline(clean, period, start, end, adjust)),
-            ]
+            fetchers = (
+                [
+                    ("efinance", lambda: EFinanceAdapter().kline(clean, period, request_start, request_end, adjust)),
+                    ("akshare", lambda: AKShareAdapter().kline(clean, period, request_start, request_end, adjust)),
+                    ("baostock", lambda: BaoStockAdapter().kline(clean, request_start, request_end, adjust)),
+                ]
+                if not start and not end
+                else [
+                    ("akshare", lambda: AKShareAdapter().kline(clean, period, request_start, request_end, adjust)),
+                    ("baostock", lambda: BaoStockAdapter().kline(clean, request_start, request_end, adjust)),
+                    ("efinance", lambda: EFinanceAdapter().kline(clean, period, request_start, request_end, adjust)),
+                ]
+            )
         else:
             fetchers = [
                 ("efinance", lambda: EFinanceAdapter().kline(clean, period, start, end, adjust)),
@@ -233,7 +291,11 @@ class MarketService:
             symbol=clean,
             period=period,
             refresh=refresh,
+            cache_validator=self._validate_recent_daily_cache if period == "day" and not end else None,
+            prefer_stale_cache=period == "day",
         )
+        if period == "day":
+            frame = self._filter_daily_trading_rows(frame)
         full_indicator_payload = compute_indicators(frame, indicators or []) if indicators else {}
         if limit and limit > 0:
             frame = frame.tail(limit).reset_index(drop=True)
